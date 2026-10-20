@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.py[cod]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Pytest cache
+.pytest_cache/
