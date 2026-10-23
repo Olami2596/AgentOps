@@ -157,3 +157,103 @@ def test_retry_run_references_original_run(test_db):
     assert retry_run["retry_of_run_id"] == original_run_id
     assert retry_run["status"] == "pending"
     assert retry_run_id != original_run_id
+
+
+def test_get_retry_history_returns_complete_retry_family(test_db):
+    _, workflow_id = test_db
+
+    original_id = workflow_runs.create_run(workflow_id)
+    retry_one_id = workflow_runs.create_run(
+        workflow_id,
+        retry_of_run_id=original_id,
+    )
+    retry_two_id = workflow_runs.create_run(
+        workflow_id,
+        retry_of_run_id=retry_one_id,
+    )
+
+    history = workflow_runs.get_retry_history(original_id)
+
+    assert history is not None
+    assert {run["id"] for run in history} == {
+        original_id,
+        retry_one_id,
+        retry_two_id,
+    }
+    assert len(history) == 3
+
+
+def test_get_retry_history_from_middle_retry_includes_ancestors_and_descendants(
+    test_db,
+):
+    _, workflow_id = test_db
+
+    original_id = workflow_runs.create_run(workflow_id)
+    retry_one_id = workflow_runs.create_run(
+        workflow_id,
+        retry_of_run_id=original_id,
+    )
+    retry_two_id = workflow_runs.create_run(
+        workflow_id,
+        retry_of_run_id=retry_one_id,
+    )
+
+    history = workflow_runs.get_retry_history(retry_one_id)
+
+    assert history is not None
+    assert {run["id"] for run in history} == {
+        original_id,
+        retry_one_id,
+        retry_two_id,
+    }
+
+
+def test_get_retry_history_returns_single_run_without_retries(test_db):
+    _, workflow_id = test_db
+
+    run_id = workflow_runs.create_run(workflow_id)
+
+    history = workflow_runs.get_retry_history(run_id)
+
+    assert history is not None
+    assert len(history) == 1
+    assert history[0]["id"] == run_id
+    assert history[0]["retry_of_run_id"] is None
+
+
+def test_get_retry_history_returns_none_for_missing_run(test_db):
+    history = workflow_runs.get_retry_history("missing-run")
+
+    assert history is None
+
+
+def test_get_retry_history_handles_circular_relationships(test_db):
+    database_path, workflow_id = test_db
+
+    run_a_id = workflow_runs.create_run(workflow_id)
+    run_b_id = workflow_runs.create_run(
+        workflow_id,
+        retry_of_run_id=run_a_id,
+    )
+
+    # Create a cycle directly in the test database:
+    # run A -> run B -> run A.
+    # This represents corrupted data, not a valid retry workflow.
+    with connection.get_connection(database_path) as conn:
+        conn.execute(
+            """
+            UPDATE workflow_runs
+            SET retry_of_run_id = ?
+            WHERE id = ?
+            """,
+            (run_b_id, run_a_id),
+        )
+
+    history = workflow_runs.get_retry_history(run_a_id)
+
+    assert history is not None
+    assert {run["id"] for run in history} == {
+        run_a_id,
+        run_b_id,
+    }
+    assert len(history) == 2

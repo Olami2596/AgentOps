@@ -147,3 +147,84 @@ def get_run(run_id: str) -> dict[str, Any] | None:
         ).fetchone()
 
     return dict(row) if row is not None else None
+
+
+def list_runs(limit: int = 50) -> list[dict[str, Any]]:
+    if not 1 <= limit <= 200:
+        raise ValueError("Limit must be between 1 and 200.")
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                workflow_id,
+                status,
+                started_at,
+                finished_at,
+                summary,
+                retry_of_run_id,
+                created_at
+            FROM workflow_runs
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def get_retry_history(run_id: str) -> list[dict[str, Any]] | None:
+    """Return the complete retry family containing the specified run.
+
+    Includes the selected run, its ancestors, and all descendant retries.
+    Returns None if the selected run does not exist.
+    """
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            WITH RECURSIVE retry_family(id) AS (
+                SELECT id
+                FROM workflow_runs
+                WHERE id = ?
+
+                UNION
+
+                SELECT
+                    CASE
+                        WHEN workflow_runs.id = retry_family.id
+                        THEN workflow_runs.retry_of_run_id
+                        ELSE workflow_runs.id
+                    END
+                FROM workflow_runs
+                JOIN retry_family
+                    ON workflow_runs.id = retry_family.id
+                    OR workflow_runs.retry_of_run_id = retry_family.id
+                WHERE
+                    CASE
+                        WHEN workflow_runs.id = retry_family.id
+                        THEN workflow_runs.retry_of_run_id
+                        ELSE workflow_runs.id
+                    END IS NOT NULL
+            )
+            SELECT
+                id,
+                workflow_id,
+                status,
+                started_at,
+                finished_at,
+                summary,
+                retry_of_run_id,
+                created_at
+            FROM workflow_runs
+            WHERE id IN (SELECT id FROM retry_family)
+            ORDER BY created_at ASC, id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+
+    if not rows:
+        return None
+
+    return [dict(row) for row in rows]
