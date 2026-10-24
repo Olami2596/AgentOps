@@ -3,6 +3,7 @@ import os
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from agentops.api import app
+import pytest
 
 READ_KEY = "test-read-key"
 OPERATOR_KEY = "test-operator-key"
@@ -329,3 +330,157 @@ def test_get_retry_history_rejects_missing_api_key():
         "detail": "Invalid or missing API key"
     }
     mock_history.assert_not_called()
+
+
+def test_get_workflows_health_returns_metrics():
+    expected_health = [
+        {
+            "workflow_id": "workflow-123",
+            "workflow_name": "Order Import",
+            "workflow_enabled": True,
+            "total_runs": 5,
+            "pending_runs": 1,
+            "running_runs": 0,
+            "succeeded_runs": 2,
+            "partially_succeeded_runs": 0,
+            "failed_runs": 2,
+            "cancelled_runs": 0,
+            "average_duration_seconds": 12.5,
+            "success_rate": 50.0,
+            "has_repeated_failures": True,
+        }
+    ]
+
+    with patch(
+        "agentops.api.get_workflow_health_service",
+        return_value=expected_health,
+    ) as mock_health:
+        response = client.get(
+            "/workflows/health",
+            headers=get_read_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == expected_health
+    mock_health.assert_called_once_with(window_hours=24)
+
+
+def test_get_workflows_health_accepts_custom_window():
+    with patch(
+        "agentops.api.get_workflow_health_service",
+        return_value=[],
+    ) as mock_health:
+        response = client.get(
+            "/workflows/health?window_hours=6",
+            headers=get_read_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == []
+    mock_health.assert_called_once_with(window_hours=6)
+
+
+def test_get_workflows_health_rejects_invalid_window():
+    response = client.get(
+        "/workflows/health?window_hours=0",
+        headers=get_read_headers(),
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_workflows_health_rejects_window_above_limit():
+    response = client.get(
+        "/workflows/health?window_hours=721",
+        headers=get_read_headers(),
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_workflows_health_rejects_missing_api_key():
+    with patch(
+        "agentops.api.get_workflow_health_service"
+    ) as mock_health:
+        response = client.get("/workflows/health")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Invalid or missing API key"
+    }
+    mock_health.assert_not_called()
+
+
+def test_get_stale_runs_returns_potentially_stale_runs():
+    expected_runs = [
+        {
+            "run_id": "run-stale-123",
+            "workflow_id": "workflow-123",
+            "workflow_name": "Order Import",
+            "status": "running",
+            "started_at": "2026-10-24T09:00:00+00:00",
+            "created_at": "2026-10-24T09:00:00+00:00",
+            "retry_of_run_id": None,
+            "running_duration_minutes": 60.0,
+            "stale_after_minutes": 30,
+            "diagnostic_status": "potentially_stale",
+        }
+    ]
+
+    with patch(
+        "agentops.api.get_stale_runs_service",
+        return_value=expected_runs,
+    ) as mock_stale_runs:
+        response = client.get(
+            "/workflows/stale-runs",
+            headers=get_read_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == expected_runs
+    mock_stale_runs.assert_called_once_with(
+        stale_after_minutes=30
+    )
+
+
+def test_get_stale_runs_accepts_custom_threshold():
+    with patch(
+        "agentops.api.get_stale_runs_service",
+        return_value=[],
+    ) as mock_stale_runs:
+        response = client.get(
+            "/workflows/stale-runs?stale_after_minutes=60",
+            headers=get_read_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == []
+    mock_stale_runs.assert_called_once_with(
+        stale_after_minutes=60
+    )
+
+
+@pytest.mark.parametrize(
+    "threshold",
+    ["0", "-1", "10081"],
+)
+def test_get_stale_runs_rejects_invalid_threshold(threshold):
+    response = client.get(
+        f"/workflows/stale-runs?stale_after_minutes={threshold}",
+        headers=get_read_headers(),
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_stale_runs_rejects_missing_api_key():
+    with patch(
+        "agentops.api.get_stale_runs_service"
+    ) as mock_stale_runs:
+        response = client.get("/workflows/stale-runs")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Invalid or missing API key"
+    }
+    mock_stale_runs.assert_not_called()

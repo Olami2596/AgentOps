@@ -22,3 +22,5 @@ wheels/
 
 # Pytest cache
 .pytest_cache/
+
+backups/

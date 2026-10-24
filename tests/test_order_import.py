@@ -1,5 +1,6 @@
 import json
 import pytest
+import logging
 
 from agentops.database import (
     connection,
@@ -275,9 +276,11 @@ def test_nonexistent_workflow_is_rejected(test_db):
 
 
 
+
 def test_finalization_error_attempts_failure_recovery(
     test_db,
     monkeypatch,
+    caplog,
 ):
     _, workflow_id = test_db
 
@@ -316,15 +319,19 @@ def test_finalization_error_attempts_failure_recovery(
         failing_finalization,
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="Finalization failed",
+    with caplog.at_level(
+        logging.ERROR,
+        logger="agentops.workflows.order_import",
     ):
-        order_import.execute_order_import(
-            [valid_order()],
-            "shop-test",
-            workflow_id,
-        )
+        with pytest.raises(
+            RuntimeError,
+            match="Finalization failed",
+        ):
+            order_import.execute_order_import(
+                [valid_order()],
+                "shop-test",
+                workflow_id,
+            )
 
     assert attempted_statuses == [
         "running",
@@ -342,6 +349,24 @@ def test_finalization_error_attempts_failure_recovery(
 
     summary = json.loads(run["summary"])
     assert summary["execution_error"] == "Finalization failed"
+
+    finalization_logs = [
+        record
+        for record in caplog.records
+        if record.name == "agentops.workflows.order_import"
+        and record.getMessage().startswith(
+            "Order import finalization failed"
+        )
+    ]
+
+    assert len(finalization_logs) == 1
+
+    record = finalization_logs[0]
+    assert record.levelno == logging.ERROR
+    assert created_run_ids[0] in record.getMessage()
+    assert "RuntimeError" in record.getMessage()
+    assert record.exc_info is not None
+    assert record.exc_info[0] is RuntimeError
 
 
 def test_disabled_workflow_cannot_be_executed(test_db):
@@ -482,3 +507,60 @@ def test_invalid_direct_processing_saves_no_items_or_orders(test_db):
 
     assert items == []
     assert orders == []
+
+
+def test_processing_failure_is_logged_with_run_context(
+    test_db,
+    caplog,
+    monkeypatch,
+):
+    _, workflow_id = test_db
+
+    run_id = order_import.create_run(workflow_id)
+    order_import.update_run_status(run_id, "running")
+
+    def fail_processing(*args, **kwargs):
+        raise RuntimeError("Simulated processing failure")
+
+    monkeypatch.setattr(
+        order_import,
+        "process_order",
+        fail_processing,
+    )
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="agentops.workflows.order_import",
+    ):
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated processing failure",
+        ):
+            order_import.process_orders_in_run(
+                [valid_order()],
+                "test-source",
+                run_id,
+            )
+
+    matching_records = [
+        record
+        for record in caplog.records
+        if record.name == "agentops.workflows.order_import"
+        and record.getMessage().startswith(
+            "Order import processing failed"
+        )
+    ]
+
+    assert len(matching_records) == 1
+
+    record = matching_records[0]
+    assert record.levelno == logging.ERROR
+    assert run_id in record.getMessage()
+    assert "RuntimeError" in record.getMessage()
+    assert record.exc_info is not None
+    assert record.exc_info[0] is RuntimeError
+
+    run = get_run(run_id)
+
+    assert run is not None
+    assert run["status"] == "failed"

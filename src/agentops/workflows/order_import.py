@@ -1,10 +1,14 @@
 import json
+import logging
 from typing import Any
 
 from agentops.database.connection import get_connection
 from agentops.database.order_import_items import save_order_import_items
 from agentops.database.workflow_runs import create_run, update_run_status
 from agentops.workflows.order_service import process_order
+
+logger = logging.getLogger(__name__)
+
 
 MAX_SOURCE_NAME_LENGTH = 100
 MAX_ORDERS_PER_IMPORT = 500
@@ -101,6 +105,11 @@ def process_orders_in_run(
                 )
 
     except Exception as exc:
+        logger.exception(
+            "Order import processing failed for run_id=%s error_type=%s",
+            run_id,
+            type(exc).__name__,
+        )
         failure_summary = json.dumps(
             {
                 "source_name": source_name,
@@ -152,6 +161,11 @@ def process_orders_in_run(
             summary=summary,
         )
     except Exception as exc:
+        logger.exception(
+            "Order import finalization failed for run_id=%s error_type=%s",
+            run_id,
+            type(exc).__name__,
+        )
         failure_summary = json.dumps(
             {
                 "source_name": source_name,

@@ -1,11 +1,14 @@
 import json
 from datetime import datetime, timezone
 from uuid import uuid4
+import logging
 
 from agentops.database import audit_events
 from agentops.database.connection import get_connection
 from agentops.database.workflow_runs import get_run, update_run_status
 from agentops.workflows.order_import import process_orders_in_run
+
+logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUSES = {"failed", "partially_succeeded"}
 
@@ -327,11 +330,17 @@ def execute_approved_retry(approval_id: str) -> str:
                 )
 
         except Exception as recovery_error:
+            logger.exception(
+                "Retry-run failure recovery failed for retry_run_id=%s "
+                "original_error_type=%s recovery_error_type=%s",
+                retry_run_id,
+                type(exc).__name__,
+                type(recovery_error).__name__,
+            )
             exc.add_note(
                 "Additionally, retry-run failure recovery failed: "
                 f"{recovery_error!r}"
             )
-
         # Audit the processing failure even if recovery failed.
         try:
             audit_events.record_audit_event(
@@ -348,8 +357,16 @@ def execute_approved_retry(approval_id: str) -> str:
             )
 
         except Exception as audit_error:
+            logger.exception(
+                "Retry-failure audit logging failed for retry_run_id=%s "
+                "original_error_type=%s audit_error_type=%s",
+                retry_run_id,
+                type(exc).__name__,
+                type(audit_error).__name__,
+            )
             exc.add_note(
-                "Additionally, retry-failure audit logging failed: " f"{audit_error!r}"
+                "Additionally, retry-failure audit logging failed: "
+                f"{audit_error!r}"
             )
 
         # Preserve the original processing exception.
