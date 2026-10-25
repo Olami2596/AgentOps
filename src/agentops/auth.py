@@ -12,6 +12,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 AccessLevel = Literal["read", "operator"]
 
+
 def get_access_level(
     api_key: Annotated[str | None, Security(api_key_header)],
 ) -> AccessLevel:
@@ -19,6 +20,12 @@ def get_access_level(
     operator_key = os.getenv("AGENTOPS_OPERATOR_KEY")
 
     if not read_key or not operator_key:
+        raise HTTPException(
+            status_code=500,
+            detail="API authentication is not configured",
+        )
+
+    if secrets.compare_digest(read_key, operator_key):
         raise HTTPException(
             status_code=500,
             detail="API authentication is not configured",
